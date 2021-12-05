@@ -38,10 +38,10 @@
  */
 
 /* Basic information exposed publicly */
-#define SMEXT_CONF_NAME			"Audio"
-#define SMEXT_CONF_DESCRIPTION	"Extension for playing audio"
-#define SMEXT_CONF_VERSION		"0.1.1"
-#define SMEXT_CONF_AUTHOR		"PerfectLaugh"
+#define SMEXT_CONF_NAME			"Audio for NMRiH"
+#define SMEXT_CONF_DESCRIPTION "Extension for playing audio in NMRiH"
+#define SMEXT_CONF_VERSION		"0.1.1n"
+#define SMEXT_CONF_AUTHOR		"PerfectLaugh & clagura"
 #define SMEXT_CONF_URL			"https://github.com/PerfectLaugh"
 #define SMEXT_CONF_LOGTAG		"AUDIO"
 #define SMEXT_CONF_LICENSE		"GPL"

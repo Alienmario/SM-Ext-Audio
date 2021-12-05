@@ -68,6 +68,10 @@ mod metamod {
             sdk = Some(POSSIBLE_SDKS.get("csgo").unwrap())
         }
 
+        if cfg!(feature = "sdk2013") {
+            sdk = Some(POSSIBLE_SDKS.get("sdk2013").unwrap())
+        }
+
         let sdk = sdk.unwrap();
         let sdk_path = var(sdk.path).unwrap();
         let sdk_path = Path::new(&sdk_path);
@@ -85,29 +89,6 @@ mod metamod {
         config.include(sdk_path.join("game/shared"));
         config.include(sdk_path.join("common"));
 
-        if cfg!(feature = "protobuf") {
-            #[cfg(target_env = "msvc")]
-            {
-                #[cfg(debug_assertions)]
-                {
-                    config.object(sdk_path.join("lib/win32/release/vs2017/libprotobuf.lib"));
-                }
-                #[cfg(not(debug_assertions))]
-                {
-                    config.object(sdk_path.join("lib/win32/release/vs2017/libprotobuf.lib"));
-                }
-            }
-            #[cfg(target_env = "gnu")]
-            {
-                println!(
-                    "cargo:rustc-link-search=native={}",
-                    sdk_path.join("lib/linux32/release").to_str().unwrap()
-                );
-                println!("cargo:rustc-link-lib=static=protobuf",);
-            }
-
-            config.include(sdk_path.join("common/protobuf-2.5.0/src"));
-        }
 
         #[cfg(target_env = "msvc")]
         {
@@ -129,11 +110,11 @@ mod metamod {
         {
             config.define("COMPILER_GCC", None);
 
-            config.object(sdk_path.join("lib/linux/libtier0.so"));
-            config.object(sdk_path.join("lib/linux/libvstdlib.so"));
+            config.object(sdk_path.join("lib/public/linux32/libtier0_srv.so"));
+            config.object(sdk_path.join("lib/public/linux32/libvstdlib_srv.so"));
         }
 
-        config.file(sdk_path.join("public/engine/protobuf/netmessages.pb.cc"));
+        //config.file(sdk_path.join("public/engine/protobuf/netmessages.pb.cc"));
     }
 }
 
@@ -169,7 +150,6 @@ fn main() {
         config.flag("-pipe");
         config.flag("-fno-strict-aliasing");
         config.flag("-Wall");
-        config.flag("-Werror");
         config.flag("-Wno-unused");
         config.flag("-Wno-switch");
         config.flag("-Wno-array-bounds");
@@ -247,9 +227,6 @@ fn main() {
         .include(sm_root.join("public/amtl/amtl"))
         .include(sm_root.join("public/amtl"));
 
-    config.file(sm_root.join("public/smsdk_ext.cpp"));
-    config.file("sm/CDetour/detours.cpp");
-
     let mut c = cc::Build::new();
     #[cfg(target_os = "windows")]
     {
@@ -274,7 +251,9 @@ fn main() {
 
     c.compile("asm");
 
-    println!("cargo:rustc-link-lib=static=asm");
+    // println!("cargo:rustc-link-search=native=/home/clague/Documents/Program/SM-Ext-Audio/target/i686-unknown-linux-gnu/release");
+    // println!("cargo:rustc-link-lib=static=asm");
+    //println!("cargo:rustc-link-lib=static=smsdk_ext");
 
     #[cfg(feature = "metamod")]
     {
@@ -286,5 +265,11 @@ fn main() {
         metamod::configure_for_hl2(mm_root, &mut config);
     }
 
+    config.file("sm/CDetour/detours.cpp");
+    config.file(sm_root.join("public/smsdk_ext.cpp"));
+    //config.file("extension.cpp");
+
+    config.compiler("clang");
+    config.opt_level(0);
     config.build("src/lib.rs");
 }

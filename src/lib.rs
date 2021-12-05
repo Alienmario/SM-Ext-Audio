@@ -21,7 +21,7 @@ const CODEC_QUALITY: i32 = 3;
 #[cfg(target_os = "windows")]
 const CODEC_EXTENSION: &str = ".dll";
 #[cfg(target_os = "linux")]
-const CODEC_EXTENSION: &str = "_client.so";
+const CODEC_EXTENSION: &str = ".so";
 
 #[cfg(target_os = "windows")]
 const FFMPEG_FILENAME: &str = "ffmpeg.exe";
@@ -56,8 +56,8 @@ fn cstrncpy(dst: &mut [u8], src: &[u8]) -> usize {
 
 fn get_sm_path<'a>() -> &'a CStr {
     unsafe {
-        CStr::from_ptr(cpp!(unsafe [] -> *const i8 as "const char *" {
-           return smutils->GetSourceModPath();
+        CStr::from_ptr(cpp!(unsafe [] -> *const i8 as "const char*" {
+            return smutils->GetSourceModPath();
         }))
     }
 }
@@ -71,18 +71,16 @@ fn queue_game_frame(func: impl FnOnce() + 'static) {
 fn send_voicedata_as_slot(slot: c_int, data: &[u8], hearself: bool) {
     let size = data.len();
     let data = data.as_ptr();
-    cpp!(unsafe [slot as "int", data as "const char *", size as "size_t", hearself as "bool"] {
+    cpp!(unsafe [slot as "int", data as "char *", size as "size_t", hearself as "bool"] {
         IClient* iclient = iserver->GetClient(slot);
         if (iclient == nullptr) {
             return;
         }
 
-        CCLCMsg_VoiceData msg;
-        msg.set_data(data, size);
         if (hearself) {
-            SV_BroadcastVoiceData_AllowHearSelf(iclient, &msg, false);
+            SV_BroadcastVoiceData_AllowHearSelf(iclient, size, data, 0);
         } else {
-            SV_BroadcastVoiceData(iclient, &msg, false);
+            SV_BroadcastVoiceData(iclient, size, data, 0);
         }
     });
 }
@@ -94,37 +92,9 @@ cpp! {{
 
     #include <iserver.h>
     #include <iclient.h>
-    #include <protobuf/netmessages.pb.h>
 
-    class IVoiceCodec
-    {
-    protected:
-        virtual			~IVoiceCodec() {}
-
-    public:
-        // Initialize the object. The uncompressed format is always 8-bit signed mono.
-        virtual bool	Init(int quality) = 0;
-
-        // Use this to delete the object.
-        virtual void	Release() = 0;
-
-        // Compress the voice data.
-        // pUncompressed		-	16-bit signed mono voice data.
-        // maxCompressedBytes	-	The length of the pCompressed buffer. Don't exceed this.
-        // bFinal        		-	Set to true on the last call to Compress (the user stopped talking).
-        //							Some codecs like big block sizes and will hang onto data you give them in Compress calls.
-        //							When you call with bFinal, the codec will give you compressed data no matter what.
-        // Return the number of bytes you filled into pCompressed.
-        virtual int		Compress(const char *pUncompressed, int nSamples, char *pCompressed, int maxCompressedBytes, bool bFinal) = 0;
-
-        // Decompress voice data. pUncompressed is 16-bit signed mono.
-        virtual int		Decompress(const char *pCompressed, int compressedBytes, char *pUncompressed, int maxUncompressedBytes) = 0;
-
-        // Some codecs maintain state between Compress and Decompress calls. This should clear that state.
-        virtual bool	ResetState() = 0;
-    };
-
-    typedef void* (*CreateInterfaceFn)(const char *pName, int *pReturnCode);
+    #include "extension.h"
+    //#include <protobuf/netmessages.pb.h>
 }}
 
 mod codec;
@@ -387,23 +357,11 @@ cpp! {{
 
     SH_DECL_MANUALHOOK1(CGameClient__IsHearingClient, 0, 0, 0, bool, int);
 
-    #if defined(WIN32)
-    void (__cdecl *SV_BroadcastVoiceData_Actual)(bool) = nullptr;
-    #else
-    void (*SV_BroadcastVoiceData_Actual)(IClient *, const CCLCMsg_VoiceData *, bool) = nullptr;
-    #endif
+    void (*SV_BroadcastVoiceData_Actual)(IClient *iclient, int nbytes, char *data, int64 xuid) = nullptr;
 
-    static inline void SV_BroadcastVoiceData(IClient *iclient, const CCLCMsg_VoiceData *msg, bool drop)
+    static inline void SV_BroadcastVoiceData(IClient *iclient, int nbytes, char *data, int64 xuid)
     {
-    #if defined(WIN32)
-        __asm {
-            mov ecx, iclient;
-            mov edx, msg;
-        }
-        SV_BroadcastVoiceData_Actual(drop);
-    #else
-        SV_BroadcastVoiceData_Actual(iclient, msg, drop);
-    #endif
+        SV_BroadcastVoiceData_Actual(iclient, nbytes, data, xuid);
     }
 
     bool Hook_IsHearingClient(int slot) {
@@ -414,30 +372,17 @@ cpp! {{
         RETURN_META_VALUE(MRES_IGNORED, false);
     }
 
-    static void SV_BroadcastVoiceData_AllowHearSelf(IClient *iclient, const CCLCMsg_VoiceData *msg, bool drop)
+    static void SV_BroadcastVoiceData_AllowHearSelf(IClient *iclient, int nbytes, char *data, int64 xuid)
     {
         SH_ADD_MANUALHOOK(CGameClient__IsHearingClient, iclient, SH_STATIC(Hook_IsHearingClient), false);
-        SV_BroadcastVoiceData(iclient, msg, drop);
+        SV_BroadcastVoiceData(iclient, nbytes, data, xuid);
         SH_REMOVE_MANUALHOOK(CGameClient__IsHearingClient, iclient, SH_STATIC(Hook_IsHearingClient), false);
     }
 
-    #if defined(WIN32)
-    void __cdecl SV_BroadcastVoiceData_Callback(bool drop)
-    #else
-    void SV_BroadcastVoiceData_Callback(IClient *iclient, const CCLCMsg_VoiceData *msg, bool drop)
-    #endif
+    void SV_BroadcastVoiceData_Callback(IClient *iclient, int length, char *data, int64 xuid)
     {
-    #if defined(WIN32)
-            IClient *iclient;
-        const CCLCMsg_VoiceData *msg;
-        __asm {
-            mov iclient, ecx;
-            mov msg, edx;
-        }
-    #endif
         size_t slot = (size_t)iclient->GetPlayerSlot();
-        const char *data = msg->data().data();
-        size_t data_size = msg->data().size();
+        size_t data_size = length ;
 
         rust!(SV_BroadcastVoiceData_Callback__Internal [slot : usize as "size_t", data : *const c_uchar as "const char*", data_size : usize as "size_t"] {
             let comp = unsafe { std::slice::from_raw_parts(data, data_size) };
@@ -491,134 +436,130 @@ cpp! {{
             }
         });
     }
+    
+    bool Ext::SDK_OnLoad(char *error, size_t maxlen, bool late) {
+        auto codecStore = &g_pCodecLib;
+        auto interfaceStore = &g_pCodecCreateInterface;
+        bool res = rust!(Ext__SDK_OnLoad__LoadCodecLib [error : *mut c_uchar as "char*", maxlen : usize as "size_t", codecStore: *mut *mut libloading::Library as "void*", interfaceStore : *mut isize as "CreateInterfaceFn*"] -> bool as "bool" {
+            let error = std::slice::from_raw_parts_mut(error, maxlen);
 
-    class Ext : public SDKExtension
-    {
-    public:
-        virtual bool SDK_OnLoad(char *error, size_t maxlen, bool late) {
-            auto codecStore = &g_pCodecLib;
-            auto interfaceStore = &g_pCodecCreateInterface;
-            bool res = rust!(Ext__SDK_OnLoad__LoadCodecLib [error : *mut c_uchar as "char*", maxlen : usize as "size_t", codecStore: *mut *mut libloading::Library as "void*", interfaceStore : *mut isize as "CreateInterfaceFn*"] -> bool as "bool" {
-                let error = std::slice::from_raw_parts_mut(error, maxlen);
+            // dlopen vcodec library
+            let mut vcodec_path = std::env::current_dir().unwrap();
+            let mut vcodec_relpath = CODEC_NAME.to_owned();
+            vcodec_relpath.push_str(CODEC_EXTENSION);
+            vcodec_path.push(vcodec_relpath);
 
-                // dlopen vcodec library
-                let mut vcodec_path = std::env::current_dir().unwrap();
-                let mut vcodec_relpath = CODEC_NAME.to_owned();
-                vcodec_relpath.push_str(CODEC_EXTENSION);
-                vcodec_path.push(vcodec_relpath);
+            let lib = libloading::Library::new(vcodec_path);
+            let lib = match lib {
+                Ok(lib) => Box::new(lib),
+                Err(err) => {
+                    let err = CString::new(format!("cannot load vaudio library: {}", err)).unwrap();
+                    cstrncpy(error, err.as_bytes_with_nul());
+                    return false;
+                }
+            };
 
-                let lib = libloading::Library::new(vcodec_path);
-                let lib = match lib {
-                    Ok(lib) => Box::new(lib),
+            // get vcodec's CreateInterface
+            unsafe {
+                let func: libloading::Symbol<unsafe extern "C" fn(*const c_uchar, *mut c_int)> = match lib.get(b"CreateInterface") {
+                    Ok(func) => func,
                     Err(err) => {
-                        let err = CString::new(format!("cannot load vaudio library: {}", err)).unwrap();
+                        let err = CString::new(format!("CreateInterface function not found from codec: {}", err)).unwrap();
                         cstrncpy(error, err.as_bytes_with_nul());
                         return false;
                     }
                 };
 
-                // get vcodec's CreateInterface
-                unsafe {
-                    let func: libloading::Symbol<unsafe extern "C" fn(*const c_uchar, *mut c_int)> = match lib.get(b"CreateInterface") {
-                        Ok(func) => func,
-                        Err(err) => {
-                            let err = CString::new(format!("CreateInterface function not found from codec: {}", err)).unwrap();
-                            cstrncpy(error, err.as_bytes_with_nul());
-                            return false;
-                        }
-                    };
-
-                    *interfaceStore = func.into_raw().into_raw() as _;
-                    *codecStore = Box::into_raw(lib);
-                }
-
-                // initialize extension
-                Extension::init();
-                Extension::run();
-
-                true
-            });
-
-            if (!res) {
-                return false;
+                *interfaceStore = func.into_raw().into_raw() as _;
+                *codecStore = Box::into_raw(lib);
             }
 
-            sharesys->AddDependency(myself, "sdktools.ext", true, true);
-            char conf_err[256];
-            if (!gameconfs->LoadGameConfigFile("audio.ext.games", &g_pGameConf, conf_err, sizeof(conf_err))) {
-                smutils->Format(error, maxlen, "Cannot open audio.ext.games gamedata: %s", conf_err);
-                SDK_OnUnload();
-                return false;
-            }
+            // initialize extension
+            Extension::init();
+            Extension::run();
 
-            if (!g_pGameConf->GetOffset("CGameClient::IsHearingClient", &g_iIsHearingClientOffset)) {
-                smutils->Format(error, maxlen, "Offset of CGameClient::IsHearingClient not found");
-                SDK_OnUnload();
-                return false;
-            }
-            SH_MANUALHOOK_RECONFIGURE(CGameClient__IsHearingClient, g_iIsHearingClientOffset, 0, 0);
+            true
+        });
 
-            CDetourManager::Init(smutils->GetScriptingEngine(), g_pGameConf);
-            g_pDetourSVBroadcastVoiceData = CDetourManager::CreateDetour((void*)&SV_BroadcastVoiceData_Callback, (void**)&SV_BroadcastVoiceData_Actual, "SV_BroadcastVoiceData");
-            if (g_pDetourSVBroadcastVoiceData == nullptr) {
-                smutils->Format(error, maxlen, "Could not create detour for SV_BroadcastVoiceData");
-                SDK_OnUnload();
-                return false;
-            }
-            g_pDetourSVBroadcastVoiceData->EnableDetour();
-
-            g_AudioPlayerType = handlesys->CreateType("AudioPlayer", &g_AudioPlayerTypeHandler, 0, NULL, NULL, myself->GetIdentity(), NULL);
-            sharesys->AddNatives(myself, g_Natives);
-            sharesys->RegisterLibrary(myself, "Audio");
-
-            smutils->AddGameFrameHook(OnGameFrame);
-
-            return true;
+        if (!res) {
+            return false;
         }
 
-        virtual void SDK_OnUnload() {
-            smutils->RemoveGameFrameHook(OnGameFrame);
-
-            if (g_pDetourSVBroadcastVoiceData) {
-                g_pDetourSVBroadcastVoiceData->Destroy();
-                g_pDetourSVBroadcastVoiceData = nullptr;
-            }
-
-            if (g_pGameConf != nullptr) {
-                gameconfs->CloseGameConfigFile(g_pGameConf);
-                g_pGameConf = nullptr;
-            }
-
-            // deallocate handles
-            if (g_AudioPlayerType) {
-                handlesys->RemoveType(g_AudioPlayerType, myself->GetIdentity());
-                g_AudioPlayerType = 0;
-            }
-
-            rust!(Ext__SDK_OnUnload [g_pCodecLib : *mut libloading::Library as "void*"] {
-                unsafe {
-                    Extension::shutdown();
-                    drop(Box::from_raw(g_pCodecLib));
-                }
-            });
-
-            g_pCodecCreateInterface = nullptr;
-            g_pCodecLib = nullptr;
+        sharesys->AddDependency(myself, "sdktools.ext", true, true);
+        char conf_err[256];
+        if (!gameconfs->LoadGameConfigFile("audio.ext.games", &g_pGameConf, conf_err, sizeof(conf_err))) {
+            smutils->Format(error, maxlen, "Cannot open audio.ext.games gamedata: %s", conf_err);
+            SDK_OnUnload();
+            return false;
         }
 
-        void SDK_OnAllLoaded() {
-            SM_GET_LATE_IFACE(SDKTOOLS, sdktools);
-            if (sdktools == nullptr) {
-                smutils->LogError(myself, "Cannot get sdktools instance.");
-                return;
-            }
-
-            iserver = sdktools->GetIServer();
+        if (!g_pGameConf->GetOffset("CGameClient::IsHearingClient", &g_iIsHearingClientOffset)) {
+            smutils->Format(error, maxlen, "Offset of CGameClient::IsHearingClient not found");
+            SDK_OnUnload();
+            return false;
         }
-    };
+        SH_MANUALHOOK_RECONFIGURE(CGameClient__IsHearingClient, g_iIsHearingClientOffset, 0, 0);
+
+        CDetourManager::Init(smutils->GetScriptingEngine(), g_pGameConf);
+        g_pDetourSVBroadcastVoiceData = CDetourManager::CreateDetour((void*)&SV_BroadcastVoiceData_Callback, (void**)&SV_BroadcastVoiceData_Actual, "SV_BroadcastVoiceData");
+        if (g_pDetourSVBroadcastVoiceData == nullptr) {
+            smutils->Format(error, maxlen, "Could not create detour for SV_BroadcastVoiceData");
+            SDK_OnUnload();
+            return false;
+        }
+        g_pDetourSVBroadcastVoiceData->EnableDetour();
+
+        g_AudioPlayerType = handlesys->CreateType("AudioPlayer", &g_AudioPlayerTypeHandler, 0, NULL, NULL, myself->GetIdentity(), NULL);
+        sharesys->AddNatives(myself, g_Natives);
+        sharesys->RegisterLibrary(myself, "Audio");
+
+        smutils->AddGameFrameHook(OnGameFrame);
+
+        return true;
+    }
+
+    void Ext::SDK_OnUnload() {
+        smutils->RemoveGameFrameHook(OnGameFrame);
+
+        if (g_pDetourSVBroadcastVoiceData) {
+            g_pDetourSVBroadcastVoiceData->Destroy();
+            g_pDetourSVBroadcastVoiceData = nullptr;
+        }
+
+        if (g_pGameConf != nullptr) {
+            gameconfs->CloseGameConfigFile(g_pGameConf);
+            g_pGameConf = nullptr;
+        }
+
+        // deallocate handles
+        if (g_AudioPlayerType) {
+            handlesys->RemoveType(g_AudioPlayerType, myself->GetIdentity());
+            g_AudioPlayerType = 0;
+        }
+
+        rust!(Ext__SDK_OnUnload [g_pCodecLib : *mut libloading::Library as "void*"] {
+            unsafe {
+                Extension::shutdown();
+                drop(Box::from_raw(g_pCodecLib));
+            }
+        });
+
+        g_pCodecCreateInterface = nullptr;
+        g_pCodecLib = nullptr;
+    }
+
+    void Ext::SDK_OnAllLoaded() {
+        SM_GET_LATE_IFACE(SDKTOOLS, sdktools);
+        if (sdktools == nullptr) {
+            smutils->LogError(myself, "Cannot get sdktools instance.");
+            return;
+        }
+
+        iserver = sdktools->GetIServer();
+    }
 
     Ext g_Ext;
-    SMEXT_LINK(&g_Ext);
+    SDKExtension *g_pExtensionIface = &g_Ext;
 
     static cell_t Native_AudioMixer_GetClientCanHearSelf(IPluginContext *pContext, const cell_t *params)
     {

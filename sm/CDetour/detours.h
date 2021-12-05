@@ -184,7 +184,6 @@ ret name##Class::name(p1type p1name, p2type p2name, p3type p3name, p4type p4name
 #define DETOUR_CREATE_MEMBER(name, gamedata) CDetourManager::CreateDetour(GET_MEMBER_CALLBACK(name), GET_MEMBER_TRAMPOLINE(name), gamedata);
 #define DETOUR_CREATE_STATIC(name, gamedata) CDetourManager::CreateDetour(GET_STATIC_CALLBACK(name), GET_STATIC_TRAMPOLINE(name), gamedata);
 
-
 class GenericClass {};
 typedef void (GenericClass::*VoidFunc)();
 
