@@ -20,4 +20,24 @@
 			}
 		}
 	}
+	"hl2mp"
+	{
+		"Offsets"
+		{
+			"CGameClient::IsHearingClient"
+			{
+				"windows"	"36"
+				"linux"		"31"
+			}
+		}
+		"Signatures"
+		{
+			"SV_BroadcastVoiceData"
+			{
+				"library" "engine"
+				"windows" "\x55\x8B\xEC\xA1\x2A\x2A\x2A\x2A\x83\xEC\x50"
+				"linux"   "@_Z21SV_BroadcastVoiceDataP7IClientiPcx"
+			}
+		}
+	}
 }

@@ -150,6 +150,7 @@ fn main() {
         config.flag("-pipe");
         config.flag("-fno-strict-aliasing");
         config.flag("-Wall");
+        // config.flag("-Werror");
         config.flag("-Wno-unused");
         config.flag("-Wno-switch");
         config.flag("-Wno-array-bounds");
@@ -269,7 +270,7 @@ fn main() {
     config.file(sm_root.join("public/smsdk_ext.cpp"));
     //config.file("extension.cpp");
 
-    config.compiler("clang");
+    //config.compiler("clang");
     config.opt_level(0);
     config.build("src/lib.rs");
 }
